@@ -5,6 +5,19 @@ open Debug
 let read_fds : (Unix.file_descr, Datatypes.nat) Hashtbl.t = Hashtbl.create 17
 let write_fds : (Datatypes.nat, Unix.file_descr) Hashtbl.t = Hashtbl.create 17
 
+(* How much the shim prints to stdout:
+     0 = nothing,
+     1 = connections and every message sent/received,
+     2 = also the initial state and the whole world on every send (default,
+         the original behaviour). *)
+let verbosity = ref 2
+
+(* When set, a peer that disconnects (or cannot be reached) is dropped
+   instead of crashing this node, and a peer that reconnects (e.g. a
+   restarted client) gets a fresh outgoing connection. Off by default so
+   the existing examples behave as before. *)
+let drop_dead_connections = ref false
+
 type cfg = { nodes : (Datatypes.nat * (string * int)) list
            ; me : Datatypes.nat
            ; mutable st : State.StateGetters.state
@@ -73,7 +86,8 @@ let get_write_fd name =
 let setup cfg =
   Printexc.record_backtrace true;
   the_cfg := Some cfg;
-  Printf.printf "initial state is: %a\n%!" print_state (Obj.magic cfg.st);
+  if !verbosity >= 2 then
+    Printf.printf "initial state is: %a\n%!" print_state (Obj.magic cfg.st);
   let (_, port) = get_addr_port cfg cfg.me in
   (* Printf.printf "listening on port %d" port; print_newline (); *)
   setsockopt listen_fd SO_REUSEADDR true;
@@ -81,16 +95,43 @@ let setup cfg =
   listen listen_fd 8
 
 
+let forget_write_fd name =
+  match Hashtbl.find_opt write_fds name with
+  | None -> ()
+  | Some fd ->
+     Hashtbl.remove write_fds name;
+     (try close fd with _ -> ())
+
+(* Forget an incoming connection whose peer has gone away. The peer has
+   exited or restarted, so our outgoing connection to it is stale too. *)
+let drop_read_fd fd =
+  (match Hashtbl.find_opt read_fds fd with
+   | Some name ->
+      if !verbosity >= 1 then
+        Printf.printf "node %s disconnected\n%!" (string_of_nat name);
+      forget_write_fd name
+   | None -> ());
+  Hashtbl.remove read_fds fd;
+  (try close fd with _ -> ())
+
 let new_conn () =
-  print_endline "new connection!";
+  if !verbosity >= 1 then print_endline "new connection!";
   let (node_fd, node_addr) = accept listen_fd in
   let chunk = receive_chunk node_fd in
   let node = Bytes.to_string chunk in
   let name = nat_of_string node in
+  (* A second incoming connection from the same node means it restarted
+     before we noticed the old connection closing: drop the old connection
+     (and with it our stale outgoing one). *)
+  if !drop_dead_connections then
+    Hashtbl.fold (fun fd n acc -> if n = name then fd :: acc else acc) read_fds []
+    |> List.iter drop_read_fd;
   Hashtbl.add read_fds node_fd name;
   (* ignore (get_write_fd name); *)
-  Printf.printf "done processing new connection from node %s" node;
-  print_newline ()
+  if !verbosity >= 1 then begin
+    Printf.printf "done processing new connection from node %s" node;
+    print_newline ()
+  end
 
 let check_for_new_connections () =
   let fds = [listen_fd] in
@@ -111,17 +152,31 @@ let recv_msg fd =
   let chunk = receive_chunk fd in
   let (l, tag, msg) = deserialize_msg (Bytes.to_string chunk) in
   let src = get_name_for_read_fd fd in
-  Printf.printf "got msg in protocol %a with tag = %a, contents = %a from %s" print_nat l print_nat tag (print_list print_nat) msg (string_of_nat src);
-  print_newline ();
+  if !verbosity >= 1 then begin
+    Printf.printf "got msg in protocol %a with tag = %a, contents = %a from %s" print_nat l print_nat tag (print_list print_nat) msg (string_of_nat src);
+    print_newline ()
+  end;
   (l, src, tag, msg)
 
 let send_msg l dst tag msg =
-  Printf.printf "sending msg in protocol %a with tag = %a, contents = %a to %s" print_nat l print_nat tag (print_list print_nat) msg (string_of_nat dst);
-  print_newline ();
-  let fd = get_write_fd dst in
+  if !verbosity >= 1 then begin
+    Printf.printf "sending msg in protocol %a with tag = %a, contents = %a to %s" print_nat l print_nat tag (print_list print_nat) msg (string_of_nat dst);
+    print_newline ()
+  end;
   let s = serialize_msg l tag msg in
   let chunk = Bytes.of_string s in
-  send_chunk fd chunk
+  if not !drop_dead_connections then send_chunk (get_write_fd dst) chunk
+  else
+    (* Try the cached connection, then a fresh one; if the peer is gone,
+       the message is lost, as if dropped by the network. *)
+    let attempt () = send_chunk (get_write_fd dst) chunk in
+    try attempt () with _ ->
+      forget_write_fd dst;
+      try attempt () with e ->
+        forget_write_fd dst;
+        if !verbosity >= 1 then
+          Printf.printf "could not reach node %s (%s); message dropped\n%!"
+            (string_of_nat dst) (Printexc.to_string e)
 
 let get_current_state () =
   let cfg = get_cfg "get_current_sate" in

@@ -154,6 +154,20 @@ split=>//; case: I=>ps[bs][_ _ Sim _].
 by apply: vard_step_1_star_trace_correct Sim.
 Qed.
 
+(* [Run] An interactive client: issues requests produced by [next] (see
+   KVNodes.session) until it returns None. *)
+Program Definition run_session (c : nid) (Hc : c \in cls)
+        (next : option (input * output) -> option input) :
+  DHT [c, W] (fun i => network_rely W c init_state i,
+              fun (_ : option input) m =>
+                trace_correct (resp_trace (dsoup (getStatelet m l)))) :=
+  Do (with_inv ii (@session l p b cls Huniq c Hc next)).
+Next Obligation.
+move=>c Hc next i/=R; apply: with_inv_rule'; apply: call_rule=>// res m _ _ I _.
+case: I=>ps[bs][_ _ Sim _].
+by apply: vard_step_1_star_trace_correct Sim.
+Qed.
+
 Open Scope string_scope.
 
 Definition inputs1 : seq input :=
@@ -185,3 +199,7 @@ Definition c_runner1 (u : unit) :=
   SimpleKVStoreApp.run_client SimpleKVStoreApp.c1 SimpleKVStoreApp.Hc1 SimpleKVStoreApp.inputs1.
 Definition c_runner2 (u : unit) :=
   SimpleKVStoreApp.run_client SimpleKVStoreApp.c2 SimpleKVStoreApp.Hc2 SimpleKVStoreApp.inputs2.
+Definition c_session1 next (u : unit) :=
+  SimpleKVStoreApp.run_session SimpleKVStoreApp.c1 SimpleKVStoreApp.Hc1 next.
+Definition c_session2 next (u : unit) :=
+  SimpleKVStoreApp.run_session SimpleKVStoreApp.c2 SimpleKVStoreApp.Hc2 next.

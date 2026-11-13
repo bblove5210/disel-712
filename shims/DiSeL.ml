@@ -56,7 +56,11 @@ let rec get_msg = function
   | fd :: fds ->
      try
        Some (recv_msg fd)
-     with e ->
+     with _ when !drop_dead_connections ->
+       (* the peer closed the connection: forget it and keep going *)
+       drop_read_fd fd;
+       get_msg fds
+     | e ->
        (* Printf.printf "Got exception: %s\n" (Printexc.to_string e);
        Printexc.print_backtrace stdout; *)
        errors := !errors + 1;
@@ -108,7 +112,8 @@ let tryrecv_action_wrapper (ctx,hk) this p =
 
 
 let send_action_wrapper (ctx,hk) p this (l : Ordtype.Ordered.sort) t m dst =
-  Printf.printf "World is %a\n%!" print_world (Unionmap.UMDef.from (Obj.magic ()) ctx);
+  if !verbosity >= 2 then
+    Printf.printf "World is %a\n%!" print_world (Unionmap.UMDef.from (Obj.magic ()) ctx);
   send_msg (Obj.magic l) dst (t.Protocols.Transitions.t_snd) m;
   let dstatelet = get_protocol_state l in
   let ost' = t.Protocols.Transitions.send_step this dst dstatelet m (Obj.magic ()) in

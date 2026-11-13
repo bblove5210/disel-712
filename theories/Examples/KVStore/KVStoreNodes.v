@@ -388,6 +388,40 @@ case: todo Hc' HI=>[|i rest] H HI; last by move: H.
 by rewrite /c_inv/= add0n in HI.
 Qed.
 
+(* Interactive session. Inputs are produced on demand by [next], which is
+   handed the previous round trip (None at the start) and returns the next
+   request, or None to stop. The spec holds for every [next], so the
+   extracted program may implement it with real I/O (read a command, print
+   the last response). *)
+Definition sess_cond (x : option input) := if x is Some _ then true else false.
+
+Definition sess_inv (_ : unit) (_ : option input) (_ : state) := True.
+
+Program Definition session_body
+        (next : option (input * output) -> option input) (x : option input) :
+  {a : unit}, DHT [cl, W]
+  (fun s => sess_cond x /\ sess_inv a x s,
+   fun x' s1 => sess_inv a x' s1) :=
+  Do (match x with
+      | Some i => r <-- request i; ret _ _ (next (Some r))
+      | None => ret _ _ None
+      end).
+Next Obligation.
+move=>next x; apply: ghC=>s a [] Hc' _ C.
+case: x Hc'=>[i|]//= _.
+apply: step; apply: call_rule=>// r j _ _.
+by apply: ret_rule=>m _.
+Qed.
+
+(* [Run] the client serves requests from [next] until it returns None *)
+Program Definition session (next : option (input * output) -> option input) :
+  DHT [cl, W] (fun _ => True, fun (_ : option input) _ => True) :=
+  Do (@while cl W _ _ sess_cond sess_inv _ (session_body next) (next None)).
+Next Obligation. by []. Qed.
+Next Obligation.
+by move=>next i _; apply: (gh_ex (g:=tt)); apply: call_rule.
+Qed.
+
 End Client.
 
 End KVNodes.
