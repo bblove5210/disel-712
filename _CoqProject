@@ -37,6 +37,12 @@ theories/Examples/Calculator/CalculatorServerLib.v
 theories/Examples/Calculator/SimpleCalculatorServers.v
 theories/Examples/Calculator/DelegatingCalculatorServer.v
 theories/Examples/Calculator/SimpleCalculatorApp.v
+theories/Examples/KVStore/VarD.v
+theories/Examples/KVStore/KVStoreSpec.v
+theories/Examples/KVStore/KVStoreProtocol.v
+theories/Examples/KVStore/KVStoreInvariant.v
+theories/Examples/KVStore/KVStoreNodes.v
+theories/Examples/KVStore/SimpleKVStoreApp.v
 theories/Examples/TwoPhaseCommit/TwoPhaseProtocol.v
 theories/Examples/TwoPhaseCommit/TwoPhaseCoordinator.v
 theories/Examples/TwoPhaseCommit/TwoPhaseParticipant.v
@@ -49,3 +55,4 @@ theories/Examples/LockResource/LockProtocol.v
 theories/Examples/LockResource/ResourceProtocol.v
 extraction/calculator/CalculatorExtraction.v
 extraction/TPC/TwoPhaseExtraction.v
+extraction/kvstore/KVStoreExtraction.v
