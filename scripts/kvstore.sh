@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
+# Run the KV store once with N batch clients (default 2): start the primary
+# and backup, let every client run its fixed list of requests, print the
+# results, and stop.
+#
+#   ./scripts/kvstore.sh [N]        (default N: $CLIENTS, else 2)
 
-kvstore=KVStoreMain.native
+cd "$(dirname "$0")/.."
+. scripts/kvstore-cluster.sh
+kv_check_binary
 
-if ! [ -x ./$kvstore ]
-then
-    echo "$kvstore not found!"
-    echo "Run 'make $kvstore' first."
-    exit 1
-fi
+N=${1:-${CLIENTS:-2}}
+kv_check_count "$N"
+CLUSTER=$(kv_cluster "$N")
 
-CLUSTER="1 127.0.0.1 9101 2 127.0.0.1 9102 3 127.0.0.1 9103 4 127.0.0.1 9104"
-
-./$kvstore -me 1 -mode primary $CLUSTER >primary.log 2>&1 &
+./$kvstore -me 1 -mode primary -clients $N $CLUSTER >primary.log 2>&1 &
 PRIMARY=$!
-./$kvstore -me 2 -mode backup  $CLUSTER >backup.log 2>&1 &
+./$kvstore -me 2 -mode backup  -clients $N $CLUSTER >backup.log 2>&1 &
 BACKUP=$!
 sleep 1
 
-./$kvstore -me 3 -mode client $CLUSTER >client3.log 2>&1 &
-C3=$!
-./$kvstore -me 4 -mode client $CLUSTER >client4.log 2>&1 &
-C4=$!
+CLIENT_PIDS=()
+for ((c = 3; c < N + 3; c++)); do
+    ./$kvstore -me $c -mode client -clients $N $CLUSTER >client$c.log 2>&1 &
+    CLIENT_PIDS+=($!)
+done
 
-wait $C3 $C4
+wait "${CLIENT_PIDS[@]}"
 kill $PRIMARY $BACKUP 2>/dev/null
 
-grep -A100 "^client" client3.log
-grep -A100 "^client" client4.log
+for ((c = 3; c < N + 3; c++)); do
+    grep -A100 "^client" client$c.log
+done

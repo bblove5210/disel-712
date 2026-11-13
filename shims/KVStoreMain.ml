@@ -13,6 +13,7 @@ let mode : mode option ref = ref None
 let me : Datatypes.nat option ref = ref None
 let linger : int ref = ref 3
 let verbose : int option ref = ref None
+let clients : int ref = ref 2
 let nodes : (Datatypes.nat * (string * int)) list ref = ref []
 
 let usage msg =
@@ -25,8 +26,10 @@ let usage msg =
   print_newline ();
   print_endline "Options are as follows:";
   print_endline "    -me <NAME>        the identity of this node (required)";
+  print_endline "    -clients <N>      number of client nodes, 3 .. N+2 (default 2);";
+  print_endline "                      must be the same on every node";
   print_endline "    -mode <MODE>      primary (node 1), backup (node 2), or, for";
-  print_endline "                      nodes 3 and 4: client (run a fixed list of";
+  print_endline "                      client nodes: client (run a fixed list of";
   print_endline "                      requests) or repl (read requests from stdin)";
   print_endline "    -v <0|1|2>        shim output: 0 none, 1 messages, 2 also states";
   print_endline "                      (default 2, but 0 in repl mode)";
@@ -42,6 +45,7 @@ let rec parse_args = function
   | "-mode" :: "repl" :: args -> mode := Some Repl; parse_args args
   | "-me" :: name :: args -> me := Some (nat_of_string name); parse_args args
   | "-v" :: n :: args -> verbose := Some (int_of_string n); parse_args args
+  | "-clients" :: n :: args -> clients := int_of_string n; parse_args args
   | "-linger" :: n :: args -> linger := int_of_string n; parse_args args
   | name :: ip :: port :: args ->
      nodes := (nat_of_string name, (ip, int_of_string port)) :: !nodes;
@@ -165,8 +169,28 @@ let repl_next (interactive : bool) (last_sent : float ref) prev =
   in
   read ()
 
+(* The fixed request list run by a batch client. Odd and even clients run
+   different scripts, each on its own key, so that results do not depend on
+   how the clients interleave. Clients 3 and 4 use the keys "x" and "y". *)
+let batch_inputs n =
+  let suffix = if n = 3 || n = 4 then "" else string_of_int n in
+  let script =
+    if n mod 2 = 1 then
+      let k = "x" ^ suffix in
+      [ "PUT " ^ k ^ " 1"; "GET " ^ k; "CAS " ^ k ^ " 1 2"; "CAS " ^ k ^ " 1 3";
+        "GET " ^ k; "DEL " ^ k; "GET " ^ k ]
+    else
+      let k = "y" ^ suffix in
+      [ "PUT " ^ k ^ " hello"; "CAD " ^ k ^ " nope"; "GET " ^ k;
+        "CAD " ^ k ^ " hello"; "GET " ^ k; "CAS " ^ k ^ " - world"; "GET " ^ k ]
+  in
+  List.map (fun s -> match parse_command s with
+                     | Input i -> i
+                     | _ -> failwith ("bad batch command " ^ s)) script
+
 let main () =
   parse_args (List.tl (Array.to_list Sys.argv));
+  let n_clients = nat_of_int !clients in
   (* Peers may come and go (e.g. clients started and stopped by hand), so
      never die because of a closed or unreachable connection. *)
   Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
@@ -178,14 +202,23 @@ let main () =
      | None, _ -> 2);
   match !mode, !me with
   | Some mode, Some me -> begin
-     Shim.setup { nodes = !nodes; me = me; st = SimpleKVStoreApp.init_state };
+     Shim.setup { nodes = !nodes; me = me;
+                  st = SimpleKVStoreApp.init_state n_clients };
+     let client () =
+       match SimpleKVStoreApp.client_of n_clients me with
+       | Some c -> c
+       | None ->
+          usage (Printf.sprintf "with -clients %d, client nodes are 3 .. %d"
+                   !clients (!clients + 2)) in
      match mode, int_of_nat me with
-     | Primary, 1 -> SimpleKVStoreApp.p_runner ()
-     | Backup, 2 -> SimpleKVStoreApp.b_runner ()
-     | Client, n when n = 3 || n = 4 ->
+     | Primary, 1 -> SimpleKVStoreApp.p_runner n_clients ()
+     | Backup, 2 -> SimpleKVStoreApp.b_runner n_clients ()
+     | (Primary | Backup), n ->
+        usage (Printf.sprintf "node %d cannot run in this mode" n)
+     | Client, n ->
+        let c = client () in
         let start = Unix.gettimeofday () in
-        let l = if n = 3 then SimpleKVStoreApp.c_runner1 ()
-                else SimpleKVStoreApp.c_runner2 () in
+        let l = SimpleKVStoreApp.c_runner n_clients c (batch_inputs n) () in
         let elapsed = Unix.gettimeofday () -. start in
         Printf.printf "client %d got %d responses in %.3fs:\n" n (List.length l) elapsed;
         print_results l;
@@ -193,14 +226,14 @@ let main () =
            shim does not trip over a closed socket while other clients
            are still being served. *)
         Unix.sleep !linger
-     | Repl, n when n = 3 || n = 4 ->
+     | Repl, n ->
+        let c = client () in
         let interactive = Unix.isatty Unix.stdin in
         if interactive then
-          Printf.printf "Disel KV store, client node %d. Type help for commands.\n%!" n;
+          Printf.printf "Disel KV store, client node %d of 3 .. %d. Type help for commands.\n%!"
+            n (!clients + 2);
         let next = repl_next interactive (ref 0.) in
-        ignore (if n = 3 then SimpleKVStoreApp.c_session1 next ()
-                else SimpleKVStoreApp.c_session2 next ())
-     | _, n -> usage (Printf.sprintf "node %d cannot run in this mode" n)
+        ignore (SimpleKVStoreApp.c_session n_clients c next ())
     end
   | _, _ -> usage "-mode and -me must be given"
 

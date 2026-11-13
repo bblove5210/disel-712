@@ -4,7 +4,6 @@ From DiSeL Require Import SimpleKVStoreApp.
 Cd "extraction".
   Cd "kvstore".
     Separate Extraction State.StateGetters.getStatelet
-                        init_state p_runner b_runner c_runner1 c_runner2
-                        c_session1 c_session2.
+                        init_state p_runner b_runner client_of c_runner c_session.
   Cd "..".
 Cd "..".

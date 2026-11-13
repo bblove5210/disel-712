@@ -89,3 +89,6 @@ _build
 Makefile.coq.conf
 .Makefile.coq.d
 .coqdeps.d
+
+# kvstore-servers.sh: number of clients the servers were started with
+kvstore.clients
